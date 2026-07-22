@@ -150,22 +150,6 @@ For non-georeferenced PNG/JPEG inputs, `gsd_m`, `w_m`, `h_m`, `area_m2` are empt
 
 ---
 
-## Citation
-
-If you use this tool in academic work, please cite the SAS-YOLO paper:
-
-```bibtex
-@article{Bayrak2026SAS,
-  title   = {SAS-YOLO: ...},
-  author  = {Bayrak, Onur Can and ...},
-  journal = {...},
-  year    = {2026}
-}
-```
-
-(Fill in once published.)
-
----
 
 ## License
 
