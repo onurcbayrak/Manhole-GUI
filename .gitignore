@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+*.spec.bak
+
+# Model ağırlıkları ve büyük ortofotolar repoya dahil edilmez
+*.pt
+*.tif
+*.tiff
+!examples/**/*.tif
+!examples/**/*.tiff
+
+# IDE
+.vscode/
+.idea/
+
+# Export çıktıları
+exports/
