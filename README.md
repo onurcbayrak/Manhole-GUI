@@ -4,8 +4,6 @@ Desktop review and editing interface for **manhole / storm-drain / rectangular-c
 aerial orthophotos, using YOLO-family models (SAS-enhanced) and optional SAM3 text-prompted
 semantic segmentation as a pre-filter.
 
-Companion GUI for the SAS-YOLO paper (Bayrak et al., in preparation).
-
 <p align="center">
   <em>Screenshots coming soon — add <code>docs/screenshot-*.png</code> and reference them here.</em>
 </p>
