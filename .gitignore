@@ -7,7 +7,7 @@ dist/
 *.egg-info/
 *.spec.bak
 
-# Model ağırlıkları ve büyük ortofotolar repoya dahil edilmez
+# Model weights and large orthophotos are excluded
 *.pt
 *.tif
 *.tiff
@@ -18,5 +18,5 @@ dist/
 .vscode/
 .idea/
 
-# Export çıktıları
+# Export outputs
 exports/
