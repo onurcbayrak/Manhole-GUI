@@ -1,15 +1,10 @@
-"""YOLO (.pt) model yükleme ve sınıf isimlerinin çözümlenmesi."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
-# Makaledeki hazır senaryolar (Europe_variants_640_no_overlap/paper_project/final).
-# Sadece arayüzde hızlı-doldurma önerisi olarak kullanılır; ağırlık dosyaları pakete gömülmez.
 CLASS_PRESETS: dict[str, dict[int, str]] = {
     "single": {0: "Manhole"},
     "3class": {0: "Manhole", 1: "Storm Drain", 2: "Rectangular"},
@@ -27,14 +22,10 @@ CLASS_PRESETS: dict[str, dict[int, str]] = {
 @dataclass
 class LoadedModel:
     path: Path
-    model: object  # ultralytics.YOLO
+    model: object
     names: dict[int, str]
 
     def predict_tile(self, image_array, conf: float = 0.25, iou: float = 0.45):
-        """Tek bir RGB uint8 kare (H, W, 3) üzerinde tespit çalıştırır.
-
-        Döndürür: list[(class_id, confidence, x_min, y_min, x_max, y_max)] (piksel, tile-local).
-        """
         results = self.model.predict(source=image_array, conf=conf, iou=iou, verbose=False)
         detections = []
         if not results:
@@ -52,7 +43,7 @@ class LoadedModel:
 
 
 def load_model(path: Path) -> LoadedModel:
-    from ultralytics import YOLO  # ağır içe aktarım; yalnızca gerektiğinde yüklenir
+    from ultralytics import YOLO
 
     model = YOLO(str(path))
     raw_names = getattr(model, "names", None) or {}

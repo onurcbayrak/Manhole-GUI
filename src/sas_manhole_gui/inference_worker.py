@@ -1,14 +1,18 @@
-"""Arka planda tiling + YOLO inference + NMS birleştirme çalıştıran QThread worker'ı."""
-
 from __future__ import annotations
+
+import threading
 
 from PySide6.QtCore import QThread, Signal
 
 from sas_manhole_gui.model_manager import LoadedModel
-from sas_manhole_gui.project_state import Detection, ProjectState
+from sas_manhole_gui.project_state import Detection, ProjectState, SamRegion
 from sas_manhole_gui.tiler import generate_tiles
 
-RawDetection = tuple[int, float, float, float, float, float]  # class_id, conf, x1, y1, x2, y2
+RawDetection = tuple[int, float, float, float, float, float]
+
+SAM_FILTER_NONE = "none"
+SAM_FILTER_INSIDE = "inside"
+SAM_FILTER_OUTSIDE = "outside"
 
 
 def _iou(a: RawDetection, b: RawDetection) -> float:
@@ -25,7 +29,6 @@ def _iou(a: RawDetection, b: RawDetection) -> float:
 
 
 def merge_detections(detections: list[RawDetection], iou_threshold: float = 0.5) -> list[RawDetection]:
-    """Kesitler arası örtüşmeden kaynaklanan tekrar tespitleri sınıf bazlı NMS ile birleştirir."""
     by_class: dict[int, list[RawDetection]] = {}
     for det in detections:
         by_class.setdefault(det[0], []).append(det)
@@ -40,10 +43,35 @@ def merge_detections(detections: list[RawDetection], iou_threshold: float = 0.5)
     return kept
 
 
+def _point_in_any_region(x: float, y: float, regions: list[SamRegion]) -> bool:
+    for r in regions:
+        if r.contains_point(x, y):
+            return True
+    return False
+
+
+def apply_sam_filter(
+    detections: list[RawDetection], regions: list[SamRegion], mode: str
+) -> list[RawDetection]:
+    if mode == SAM_FILTER_NONE or not regions:
+        return detections
+    kept: list[RawDetection] = []
+    for d in detections:
+        cx = (d[2] + d[4]) / 2.0
+        cy = (d[3] + d[5]) / 2.0
+        inside = _point_in_any_region(cx, cy, regions)
+        if mode == SAM_FILTER_INSIDE and inside:
+            kept.append(d)
+        elif mode == SAM_FILTER_OUTSIDE and not inside:
+            kept.append(d)
+    return kept
+
+
 class InferenceWorker(QThread):
-    progress = Signal(int, int, str)  # tamamlanan, toplam, aktif görüntü adı
-    raster_finished = Signal(str, list)  # raster_path, list[Detection]
+    progress = Signal(int, int, str)
+    raster_finished = Signal(str, list)
     raster_error = Signal(str, str)
+    state_changed = Signal(str)
     all_finished = Signal()
 
     def __init__(
@@ -56,6 +84,7 @@ class InferenceWorker(QThread):
         conf: float = 0.25,
         iou: float = 0.45,
         merge_iou: float = 0.5,
+        sam_filter_mode: str = SAM_FILTER_NONE,
         parent=None,
     ):
         super().__init__(parent)
@@ -67,12 +96,39 @@ class InferenceWorker(QThread):
         self.conf = conf
         self.iou = iou
         self.merge_iou = merge_iou
+        self.sam_filter_mode = sam_filter_mode
         self._cancelled = False
+        self._resume_event = threading.Event()
+        self._resume_event.set()
+        self._paused = False
 
     def cancel(self) -> None:
         self._cancelled = True
+        self._resume_event.set()
+
+    def pause(self) -> None:
+        if self._paused or self._cancelled:
+            return
+        self._paused = True
+        self._resume_event.clear()
+        self.state_changed.emit("paused")
+
+    def resume(self) -> None:
+        if not self._paused:
+            return
+        self._paused = False
+        self._resume_event.set()
+        self.state_changed.emit("running")
+
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def _wait_if_paused(self) -> None:
+        if not self._resume_event.is_set():
+            self._resume_event.wait()
 
     def run(self) -> None:
+        self.state_changed.emit("running")
         tiles_per_raster: dict[str, list] = {}
         total = 0
         for path in self.raster_paths:
@@ -92,12 +148,13 @@ class InferenceWorker(QThread):
                 continue
             raw: list[RawDetection] = []
             for window in tiles_per_raster.get(path, []):
+                self._wait_if_paused()
                 if self._cancelled:
                     break
                 try:
                     tile_array = pr.layer.read_tile_array(window, self.tile_size)
                     preds = self.model.predict_tile(tile_array, conf=self.conf, iou=self.iou)
-                except Exception as exc:  # noqa: BLE001 - worker thread'de tüm hataları raporla
+                except Exception as exc:
                     self.raster_error.emit(path, str(exc))
                     preds = []
 
@@ -121,10 +178,12 @@ class InferenceWorker(QThread):
                 break
 
             merged = merge_detections(raw, self.merge_iou)
+            filtered = apply_sam_filter(merged, pr.sam_regions, self.sam_filter_mode)
             detections = [
                 Detection(class_id=c, confidence=conf_, x_min=x1, y_min=y1, x_max=x2, y_max=y2, source="model")
-                for c, conf_, x1, y1, x2, y2 in merged
+                for c, conf_, x1, y1, x2, y2 in filtered
             ]
             self.raster_finished.emit(path, detections)
 
+        self.state_changed.emit("stopped" if self._cancelled else "finished")
         self.all_finished.emit()

@@ -1,15 +1,7 @@
-"""Görsel (kutulu görüntü) ve CBS (shp/csv/geojson/gpkg) export işlemleri.
-
-İsimlendirme kuralı:
-  - Tam görüntü:  {orijinal_isim}_detections.<ext>
-  - Kesit kesit:  {orijinal_isim}_tile_r{satır:03d}_c{sütun:03d}_640x640.<ext>
-  - Vektör:       {stem}_detections.<shp|csv|geojson|gpkg>
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import numpy as np
 import rasterio
@@ -134,18 +126,21 @@ def export_visual_tiles(
     return paths
 
 
-# --- CBS (vektör) export -------------------------------------------------
-
 _VECTOR_COLUMNS = [
     "id",
     "image",
     "class_id",
     "class_name",
     "confidence",
-    "x_min_px",
-    "y_min_px",
-    "x_max_px",
-    "y_max_px",
+    "col_px",
+    "row_px",
+    "w_px",
+    "h_px",
+    "bbox_px",
+    "gsd_m",
+    "w_m",
+    "h_m",
+    "area_m2",
     "edited",
     "source",
 ]
@@ -172,8 +167,22 @@ def build_detections_table(rasters: Iterable[ProjectRaster], classes: list[Class
     for pr in rasters:
         if crs is None:
             crs = pr.layer.crs
+        gsd = pr.layer.gsd_meters()
         for det in pr.detections:
             cdef = lookup.get(det.class_id)
+            col_px = float(det.x_min)
+            row_px = float(det.y_min)
+            w_px = max(0.0, float(det.x_max - det.x_min))
+            h_px = max(0.0, float(det.y_max - det.y_min))
+            bbox_px = int(round(w_px * h_px))
+            if gsd is not None and gsd > 0:
+                w_m: Optional[float] = w_px * gsd
+                h_m: Optional[float] = h_px * gsd
+                area_m2: Optional[float] = w_m * h_m
+            else:
+                w_m = None
+                h_m = None
+                area_m2 = None
             rows.append(
                 {
                     "id": det.det_id,
@@ -181,10 +190,15 @@ def build_detections_table(rasters: Iterable[ProjectRaster], classes: list[Class
                     "class_id": det.class_id,
                     "class_name": cdef.name if cdef else f"class_{det.class_id}",
                     "confidence": det.confidence,
-                    "x_min_px": det.x_min,
-                    "y_min_px": det.y_min,
-                    "x_max_px": det.x_max,
-                    "y_max_px": det.y_max,
+                    "col_px": col_px,
+                    "row_px": row_px,
+                    "w_px": w_px,
+                    "h_px": h_px,
+                    "bbox_px": bbox_px,
+                    "gsd_m": gsd,
+                    "w_m": w_m,
+                    "h_m": h_m,
+                    "area_m2": area_m2,
                     "edited": det.edited,
                     "source": det.source,
                 }
@@ -193,7 +207,8 @@ def build_detections_table(rasters: Iterable[ProjectRaster], classes: list[Class
 
     if not rows:
         return gpd.GeoDataFrame(columns=_VECTOR_COLUMNS + ["geometry"], geometry="geometry", crs=crs)
-    return gpd.GeoDataFrame(rows, geometry=geometries, crs=crs)
+    gdf = gpd.GeoDataFrame(rows, geometry=geometries, crs=crs)
+    return gdf[_VECTOR_COLUMNS + ["geometry"]]
 
 
 def export_vector(

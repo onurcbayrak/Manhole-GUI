@@ -1,10 +1,3 @@
-"""Görüntü üzerinde seçilebilir, taşınabilir, yeniden boyutlandırılabilir tespit kutusu.
-
-Item pozisyonu her zaman (0, 0)'da tutulur; kutunun gerçek konumu doğrudan
-`rect()` (sahne/raster piksel koordinatlarında) ile temsil edilir. Böylece
-taşıma ve yeniden boyutlandırma aynı, tek koordinat sisteminde yapılır.
-"""
-
 from __future__ import annotations
 
 from typing import Callable, Optional
@@ -21,8 +14,6 @@ from PySide6.QtWidgets import (
     QStyleOptionGraphicsItem,
     QWidget,
 )
-
-_HANDLE_NAMES = ["tl", "t", "tr", "r", "br", "b", "bl", "l"]
 
 
 class DetectionItem(QGraphicsRectItem):
@@ -56,23 +47,32 @@ class DetectionItem(QGraphicsRectItem):
         self._color = QColor(color)
         self._label = label
         self._active_handle: Optional[str] = None
-        self._drag_mode: Optional[str] = None  # "move" | "resize" | None
+        self._drag_mode: Optional[str] = None
         self._drag_start_scene: Optional[QPointF] = None
         self._drag_start_rect: Optional[QRectF] = None
         self._on_change = on_change
         self._on_delete = on_delete
         self._on_class_change = on_class_change
         self._classes_provider = classes_provider
+        self._hovered = False
+        self._hover_enabled = True
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
         self.setZValue(10)
 
-    # --- görsel stil -------------------------------------------------------
     def set_style(self, color: str, label: str) -> None:
         self._color = QColor(color)
         self._label = label
         self.update()
+
+    def set_hover_enabled(self, enabled: bool) -> None:
+        self._hover_enabled = enabled
+        self.setAcceptHoverEvents(enabled)
+        if not enabled and self._hovered:
+            self._hovered = False
+            self.update()
 
     def _view_scale(self) -> float:
         scene = self.scene()
@@ -112,18 +112,19 @@ class DetectionItem(QGraphicsRectItem):
                 return name
         return None
 
-    # --- çizim -------------------------------------------------------------
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: Optional[QWidget] = None) -> None:
         r = self.rect()
         scale = self._view_scale()
         pen_width = max(1.0, 2.0 / scale)
+        if self._hovered and not self.isSelected():
+            pen_width *= 1.6
         painter.setPen(QPen(self._color, pen_width))
         painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         painter.drawRect(r)
 
-        if self.isSelected():
+        if self.isSelected() or self._hovered:
             fill = QColor(self._color)
-            fill.setAlpha(45)
+            fill.setAlpha(65 if self.isSelected() else 32)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(fill))
             painter.drawRect(r)
@@ -148,7 +149,18 @@ class DetectionItem(QGraphicsRectItem):
             for _, pt in self._handle_points(r).items():
                 painter.drawEllipse(pt, hr, hr)
 
-    # --- fare etkileşimi -----------------------------------------------
+    def hoverEnterEvent(self, event: QGraphicsSceneHoverEvent) -> None:
+        if self._hover_enabled:
+            self._hovered = True
+            self.update()
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event: QGraphicsSceneHoverEvent) -> None:
+        if self._hovered:
+            self._hovered = False
+            self.update()
+        super().hoverLeaveEvent(event)
+
     def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:
         handle = self._handle_at(event.pos())
         if handle:
@@ -160,13 +172,14 @@ class DetectionItem(QGraphicsRectItem):
         super().hoverMoveEvent(event)
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             self.setSelected(True)
-            handle = self._handle_at(event.pos())
-            self._drag_start_scene = event.scenePos()
-            self._drag_start_rect = QRectF(self.rect())
-            self._active_handle = handle
-            self._drag_mode = "resize" if handle else "move"
+            if event.button() == Qt.MouseButton.LeftButton:
+                handle = self._handle_at(event.pos())
+                self._drag_start_scene = event.scenePos()
+                self._drag_start_rect = QRectF(self.rect())
+                self._active_handle = handle
+                self._drag_mode = "resize" if handle else "move"
             event.accept()
             return
         super().mousePressEvent(event)
@@ -212,8 +225,8 @@ class DetectionItem(QGraphicsRectItem):
     def contextMenuEvent(self, event: QGraphicsSceneContextMenuEvent) -> None:
         self.setSelected(True)
         menu = QMenu()
-        delete_action = menu.addAction("Sil")
-        class_menu = menu.addMenu("Sınıfı Değiştir")
+        delete_action = menu.addAction("Delete")
+        class_menu = menu.addMenu("Change Class")
         class_actions = {}
         if self._classes_provider:
             for class_id, name, _color in self._classes_provider():

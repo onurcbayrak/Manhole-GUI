@@ -1,5 +1,3 @@
-"""Sınıf listesi paneli -- 'yeni kutu çiz' aracı için aktif sınıfı seçmeye de yarar."""
-
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
@@ -18,7 +16,7 @@ class ClassPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.addWidget(QLabel("Sınıflar (yeni kutu çizerken kullanılır):"))
+        layout.addWidget(QLabel("Classes (used when drawing new boxes):"))
         self.list_widget = QListWidget()
         self.list_widget.currentRowChanged.connect(self._on_row_changed)
         layout.addWidget(self.list_widget)

@@ -1,27 +1,86 @@
-"""Ortofoto görüntüleme + tespit düzenleme tuvali (QGIS/ArcGIS benzeri pan/zoom)."""
-
 from __future__ import annotations
 
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QTransform, QWheelEvent
+from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen, QPixmap, QPolygonF, QTransform, QWheelEvent
 from PySide6.QtWidgets import (
+    QGraphicsItem,
+    QGraphicsLineItem,
     QGraphicsPixmapItem,
+    QGraphicsPolygonItem,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
+    QStyleOptionGraphicsItem,
+    QWidget,
 )
-from PySide6.QtGui import QPixmap
 
 from sas_manhole_gui.detection_item import DetectionItem
-from sas_manhole_gui.project_state import Detection, ProjectState
+from sas_manhole_gui.project_state import Detection, ProjectState, SamRegion
 from sas_manhole_gui.raster_layer import PixelWindow
-from sas_manhole_gui.style import BG_DARK
+from sas_manhole_gui.style import BG_DARK, SAM_COLOR
+
+
+class SamRegionItem(QGraphicsPolygonItem):
+    def __init__(self, region: SamRegion):
+        if region.polygon and len(region.polygon) >= 3:
+            polygon = QPolygonF([QPointF(x, y) for x, y in region.polygon])
+        else:
+            polygon = QPolygonF(
+                [
+                    QPointF(region.x_min, region.y_min),
+                    QPointF(region.x_max, region.y_min),
+                    QPointF(region.x_max, region.y_max),
+                    QPointF(region.x_min, region.y_max),
+                ]
+            )
+        super().__init__(polygon)
+        self.region_id = region.region_id
+        self._text = region.text
+        self._confidence = region.confidence
+        self._top_left = QPointF(region.x_min, region.y_min)
+        self.setZValue(5)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        color = QColor(SAM_COLOR)
+        self.setPen(QPen(color, 2, Qt.PenStyle.DashLine))
+        fill = QColor(color)
+        fill.setAlpha(45)
+        self.setBrush(QBrush(fill))
+
+    def _view_scale(self) -> float:
+        scene = self.scene()
+        if scene is not None:
+            views = scene.views()
+            if views:
+                return max(views[0].transform().m11(), 0.0001)
+        return 1.0
+
+    def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: Optional[QWidget] = None) -> None:
+        super().paint(painter, option, widget)
+        if not self._text:
+            return
+        scale = self._view_scale()
+        font = painter.font()
+        font_size = max(6.0, 10.0 / scale)
+        font.setPointSizeF(font_size)
+        painter.setFont(font)
+        label = f"{self._text}  {self._confidence:.2f}"
+        label_h = font_size * 1.7
+        label_w = max(font_size * len(label) * 0.55, 40 / scale)
+        text_rect = QRectF(self._top_left.x(), self._top_left.y() - label_h, label_w, label_h)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(SAM_COLOR)))
+        painter.drawRect(text_rect)
+        painter.setPen(QPen(QColor("#101010")))
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, label)
 
 
 class RasterCanvas(QGraphicsView):
-    detection_selected = Signal(object)  # Optional[int]
+    detection_selected = Signal(object)
+
+    MIN_SCALE = 0.02
+    MAX_SCALE = 40.0
 
     def __init__(self, project_state: ProjectState, parent=None):
         super().__init__(parent)
@@ -33,6 +92,7 @@ class RasterCanvas(QGraphicsView):
         self.setBackgroundBrush(QColor(BG_DARK))
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
 
@@ -41,6 +101,9 @@ class RasterCanvas(QGraphicsView):
         self._base_item: Optional[QGraphicsPixmapItem] = None
         self._detail_item: Optional[QGraphicsPixmapItem] = None
         self._detection_items: dict[int, DetectionItem] = {}
+        self._sam_items: dict[int, SamRegionItem] = {}
+        self._h_crosshair: Optional[QGraphicsLineItem] = None
+        self._v_crosshair: Optional[QGraphicsLineItem] = None
 
         self._lod_timer = QTimer(self)
         self._lod_timer.setSingleShot(True)
@@ -53,6 +116,7 @@ class RasterCanvas(QGraphicsView):
         self._draw_start: Optional[QPointF] = None
         self._draw_temp_item: Optional[QGraphicsRectItem] = None
 
+        self._pan_mode = False
         self._panning = False
         self._pan_start = None
 
@@ -62,13 +126,16 @@ class RasterCanvas(QGraphicsView):
 
         project_state.active_raster_changed.connect(self.set_active_raster)
         project_state.detections_changed.connect(self._on_detections_changed)
+        project_state.sam_regions_changed.connect(self._on_sam_regions_changed)
         project_state.classes_changed.connect(self._on_classes_changed)
 
-    # --- raster yükleme --------------------------------------------------
     def set_active_raster(self, path: str) -> None:
         self._raster_path = path or None
         self.scene_.clear()
         self._detection_items.clear()
+        self._sam_items.clear()
+        self._h_crosshair = None
+        self._v_crosshair = None
         self._base_item = None
         self._detail_item = None
 
@@ -91,13 +158,19 @@ class RasterCanvas(QGraphicsView):
         self.scene_.addItem(self._base_item)
 
         self._rebuild_detection_items(pr.detections)
+        self._rebuild_sam_items(pr.sam_regions)
+        if self._draw_mode:
+            self._ensure_crosshair()
         self.fitInView(self.scene_.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self._schedule_lod_refresh()
 
-    # --- tespit item senkronizasyonu --------------------------------------
     def _current_detections(self) -> list[Detection]:
         pr = self.project_state.rasters.get(self._raster_path) if self._raster_path else None
         return pr.detections if pr else []
+
+    def _current_sam_regions(self) -> list[SamRegion]:
+        pr = self.project_state.rasters.get(self._raster_path) if self._raster_path else None
+        return pr.sam_regions if pr else []
 
     def _find_detection(self, det_id: int) -> Optional[Detection]:
         for d in self._current_detections():
@@ -108,6 +181,10 @@ class RasterCanvas(QGraphicsView):
     def _rebuild_detection_items(self, detections: list[Detection]) -> None:
         for det in detections:
             self._add_detection_item(det)
+
+    def _rebuild_sam_items(self, regions: list[SamRegion]) -> None:
+        for region in regions:
+            self._add_sam_item(region)
 
     def _add_detection_item(self, det: Detection) -> None:
         color = self.project_state.class_color(det.class_id)
@@ -124,21 +201,26 @@ class RasterCanvas(QGraphicsView):
             on_class_change=self._handle_item_class_change,
             classes_provider=self._classes_for_menu,
         )
+        item.set_hover_enabled(not self._draw_mode)
         self.scene_.addItem(item)
         self._detection_items[det.det_id] = item
+
+    def _add_sam_item(self, region: SamRegion) -> None:
+        item = SamRegionItem(region)
+        self.scene_.addItem(item)
+        self._sam_items[region.region_id] = item
 
     def _classes_for_menu(self) -> list[tuple[int, str, str]]:
         return [(c.class_id, c.name, c.color) for c in self.project_state.classes]
 
     def _handle_item_changed(self, det_id: int, rect: QRectF) -> None:
-        det = self._find_detection(det_id)
-        if det is None or self._raster is None or self._raster_path is None:
+        if self._raster is None or self._raster_path is None:
             return
         raster_rect = QRectF(0, 0, self._raster.width, self._raster.height)
         clamped = rect.intersected(raster_rect)
-        det.x_min, det.y_min, det.x_max, det.y_max = clamped.left(), clamped.top(), clamped.right(), clamped.bottom()
-        det.edited = True
-        self.project_state.notify_detections_edited(self._raster_path)
+        self.project_state.update_detection_rect(
+            self._raster_path, det_id, clamped.left(), clamped.top(), clamped.right(), clamped.bottom()
+        )
 
     def _handle_item_delete(self, det_id: int) -> None:
         if self._raster_path is None:
@@ -146,17 +228,19 @@ class RasterCanvas(QGraphicsView):
         self.project_state.remove_detection(self._raster_path, det_id)
 
     def _handle_item_class_change(self, det_id: int, class_id: int) -> None:
-        det = self._find_detection(det_id)
-        if det is None or self._raster_path is None:
+        if self._raster_path is None:
             return
-        det.class_id = class_id
-        det.edited = True
-        self.project_state.notify_detections_edited(self._raster_path)
+        self.project_state.update_detection_class(self._raster_path, det_id, class_id)
 
     def _on_detections_changed(self, raster_path: str) -> None:
         if raster_path != self._raster_path:
             return
         QTimer.singleShot(0, self._sync_detection_items)
+
+    def _on_sam_regions_changed(self, raster_path: str) -> None:
+        if raster_path != self._raster_path:
+            return
+        QTimer.singleShot(0, self._sync_sam_items)
 
     def _sync_detection_items(self) -> None:
         if self._raster_path is None:
@@ -165,6 +249,14 @@ class RasterCanvas(QGraphicsView):
             self.scene_.removeItem(item)
         self._detection_items.clear()
         self._rebuild_detection_items(self._current_detections())
+
+    def _sync_sam_items(self) -> None:
+        if self._raster_path is None:
+            return
+        for item in list(self._sam_items.values()):
+            self.scene_.removeItem(item)
+        self._sam_items.clear()
+        self._rebuild_sam_items(self._current_sam_regions())
 
     def _on_classes_changed(self) -> None:
         for det_id, item in self._detection_items.items():
@@ -185,13 +277,86 @@ class RasterCanvas(QGraphicsView):
         if det_id is not None and det_id in self._detection_items:
             self.centerOn(self._detection_items[det_id])
 
-    # --- çizim modu (yeni kutu) --------------------------------------------
     def set_draw_mode(self, enabled: bool, class_id: int = 0) -> None:
+        if enabled and self._pan_mode:
+            self.set_pan_mode(False)
         self._draw_mode = enabled
         self._draw_class_id = class_id
-        self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
-        if not enabled:
+        self._update_cursor()
+        for item in self._detection_items.values():
+            item.set_hover_enabled(not enabled)
+        if enabled:
+            self._ensure_crosshair()
+        else:
+            self._remove_crosshair()
             self._cancel_draw()
+
+    def set_pan_mode(self, enabled: bool) -> None:
+        if enabled and self._draw_mode:
+            self.set_draw_mode(False)
+        self._pan_mode = enabled
+        self._update_cursor()
+
+    def _update_cursor(self) -> None:
+        if self._panning:
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif self._draw_mode:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif self._pan_mode:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def _ensure_crosshair(self) -> None:
+        if self._raster is None:
+            return
+        if self._h_crosshair is not None and self._v_crosshair is not None:
+            return
+        pen = QPen(QColor(230, 230, 230, 180), 0, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        self._h_crosshair = QGraphicsLineItem()
+        self._h_crosshair.setPen(pen)
+        self._h_crosshair.setZValue(50)
+        self._h_crosshair.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, False)
+        self.scene_.addItem(self._h_crosshair)
+        self._v_crosshair = QGraphicsLineItem()
+        self._v_crosshair.setPen(pen)
+        self._v_crosshair.setZValue(50)
+        self.scene_.addItem(self._v_crosshair)
+        center = self.viewport().rect().center()
+        self._update_crosshair(center)
+
+    def _remove_crosshair(self) -> None:
+        if self._h_crosshair is not None:
+            self.scene_.removeItem(self._h_crosshair)
+            self._h_crosshair = None
+        if self._v_crosshair is not None:
+            self.scene_.removeItem(self._v_crosshair)
+            self._v_crosshair = None
+
+    def _update_crosshair(self, view_pos) -> None:
+        if self._h_crosshair is None or self._v_crosshair is None:
+            return
+        scene_pos = self.mapToScene(view_pos)
+        r = self.scene_.sceneRect()
+        self._h_crosshair.setLine(r.left(), scene_pos.y(), r.right(), scene_pos.y())
+        self._v_crosshair.setLine(scene_pos.x(), r.top(), scene_pos.x(), r.bottom())
+
+    def visible_pixel_window(self) -> Optional[PixelWindow]:
+        if self._raster is None:
+            return None
+        viewport_rect = self.viewport().rect()
+        visible_scene_rect = self.mapToScene(viewport_rect).boundingRect()
+        raster_rect = QRectF(0, 0, self._raster.width, self._raster.height)
+        visible = visible_scene_rect.intersected(raster_rect)
+        if visible.isEmpty() or visible.width() < 1 or visible.height() < 1:
+            return None
+        return PixelWindow(visible.x(), visible.y(), visible.width(), visible.height())
+
+    def full_pixel_window(self) -> Optional[PixelWindow]:
+        if self._raster is None:
+            return None
+        return PixelWindow(0, 0, self._raster.width, self._raster.height)
 
     def _start_draw(self, view_pos) -> None:
         scene_pos = self.mapToScene(view_pos)
@@ -242,8 +407,8 @@ class RasterCanvas(QGraphicsView):
             self.scene_.removeItem(self._draw_temp_item)
             self._draw_temp_item = None
 
-    # --- fare / klavye --------------------------------------------------
     def mousePressEvent(self, event) -> None:
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         if self._raster is None:
             super().mousePressEvent(event)
             return
@@ -251,15 +416,23 @@ class RasterCanvas(QGraphicsView):
             self._start_draw(event.pos())
             event.accept()
             return
+        if self._pan_mode and event.button() == Qt.MouseButton.LeftButton:
+            self._panning = True
+            self._pan_start = event.pos()
+            self._update_cursor()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
             self._pan_start = event.pos()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self._update_cursor()
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
+        if self._draw_mode:
+            self._update_crosshair(event.pos())
         if self._drawing:
             self._update_draw(event.pos())
             event.accept()
@@ -278,10 +451,10 @@ class RasterCanvas(QGraphicsView):
             self._finish_draw(event.pos())
             event.accept()
             return
-        if self._panning and event.button() == Qt.MouseButton.MiddleButton:
+        if self._panning and event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
             self._panning = False
             self._pan_start = None
-            self.setCursor(Qt.CursorShape.CrossCursor if self._draw_mode else Qt.CursorShape.ArrowCursor)
+            self._update_cursor()
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -289,11 +462,17 @@ class RasterCanvas(QGraphicsView):
 
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            selected = [item for item in self.scene_.selectedItems() if isinstance(item, DetectionItem)]
-            for item in selected:
-                self._handle_item_delete(item.det_id)
-            event.accept()
-            return
+            handled = False
+            for item in list(self.scene_.selectedItems()):
+                if isinstance(item, DetectionItem):
+                    self._handle_item_delete(item.det_id)
+                    handled = True
+                elif isinstance(item, SamRegionItem) and self._raster_path is not None:
+                    self.project_state.remove_sam_region(self._raster_path, item.region_id)
+                    handled = True
+            if handled:
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
@@ -301,22 +480,18 @@ class RasterCanvas(QGraphicsView):
             super().wheelEvent(event)
             return
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-        self.scale(factor, factor)
-        self._schedule_lod_refresh()
+        self._apply_zoom(factor)
         event.accept()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._schedule_lod_refresh()
 
-    # --- zoom yardımcıları (toolbar) -------------------------------------
     def zoom_in(self) -> None:
-        self.scale(1.25, 1.25)
-        self._schedule_lod_refresh()
+        self._toolbar_zoom(1.25)
 
     def zoom_out(self) -> None:
-        self.scale(0.8, 0.8)
-        self._schedule_lod_refresh()
+        self._toolbar_zoom(0.8)
 
     def zoom_fit(self) -> None:
         if self._raster is None:
@@ -324,11 +499,43 @@ class RasterCanvas(QGraphicsView):
         self.fitInView(QRectF(0, 0, self._raster.width, self._raster.height), Qt.AspectRatioMode.KeepAspectRatio)
         self._schedule_lod_refresh()
 
-    # --- yüksek çözünürlük görünüm penceresi (LOD) --------------------------
+    def _apply_zoom(self, factor: float) -> None:
+        current = self.transform().m11()
+        target = current * factor
+        if target < self.MIN_SCALE:
+            factor = self.MIN_SCALE / current if current > 0 else 1.0
+        elif target > self.MAX_SCALE:
+            factor = self.MAX_SCALE / current if current > 0 else 1.0
+        if abs(factor - 1.0) < 1e-6:
+            return
+        try:
+            self.scale(factor, factor)
+        except Exception:
+            return
+        self._schedule_lod_refresh()
+
+    def _toolbar_zoom(self, factor: float) -> None:
+        cursor_view = self.mapFromGlobal(QCursor.pos())
+        if self.viewport().rect().contains(cursor_view):
+            self._apply_zoom(factor)
+            return
+        previous_anchor = self.transformationAnchor()
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        try:
+            self._apply_zoom(factor)
+        finally:
+            self.setTransformationAnchor(previous_anchor)
+
     def _schedule_lod_refresh(self) -> None:
         self._lod_timer.start()
 
     def _refresh_detail_lod(self) -> None:
+        try:
+            self._do_refresh_detail_lod()
+        except Exception:
+            return
+
+    def _do_refresh_detail_lod(self) -> None:
         if self._raster is None or self._base_item is None:
             return
         viewport_rect = self.viewport().rect()
@@ -338,21 +545,25 @@ class RasterCanvas(QGraphicsView):
         if visible.isEmpty() or visible.width() < 1 or visible.height() < 1:
             return
 
-        out_w = min(2048, max(64, viewport_rect.width()))
-        out_h = min(2048, max(64, viewport_rect.height()))
-        window = PixelWindow(visible.x(), visible.y(), visible.width(), visible.height())
-        try:
-            img = self._raster.read_region_as_qimage(window, out_w, out_h)
-        except Exception:
+        vp_w = max(64, viewport_rect.width())
+        vp_h = max(64, viewport_rect.height())
+        src_w = max(1.0, visible.width())
+        src_h = max(1.0, visible.height())
+        out_w = int(min(2048, vp_w, max(64.0, src_w * 2.0)))
+        out_h = int(min(2048, vp_h, max(64.0, src_h * 2.0)))
+        if out_w <= 0 or out_h <= 0:
             return
+        window = PixelWindow(visible.x(), visible.y(), visible.width(), visible.height())
+        img = self._raster.read_region_as_qimage(window, out_w, out_h)
         pix = QPixmap.fromImage(img)
+        if pix.isNull() or pix.width() == 0 or pix.height() == 0:
+            return
         if self._detail_item is None:
             self._detail_item = QGraphicsPixmapItem()
             self._detail_item.setZValue(1)
             self.scene_.addItem(self._detail_item)
         self._detail_item.setPixmap(pix)
         self._detail_item.setPos(visible.x(), visible.y())
-        if pix.width() and pix.height():
-            self._detail_item.setTransform(
-                QTransform().scale(visible.width() / pix.width(), visible.height() / pix.height())
-            )
+        self._detail_item.setTransform(
+            QTransform().scale(visible.width() / pix.width(), visible.height() / pix.height())
+        )

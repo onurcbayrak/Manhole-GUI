@@ -1,5 +1,3 @@
-"""'Export' diyaloğu: görsel (tam/kesit) ve CBS (shp/csv/geojson/gpkg) dışa aktarım."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,7 +25,7 @@ from PySide6.QtCore import Qt
 from sas_manhole_gui import export_manager
 from sas_manhole_gui.project_state import ProjectState
 
-_VISUAL_EXTS = {"PNG": ".png", "JPEG": ".jpg", "GeoTIFF (georeferanslı)": ".tif"}
+_VISUAL_EXTS = {"PNG": ".png", "JPEG": ".jpg", "GeoTIFF (georeferenced)": ".tif"}
 
 
 class ExportDialog(QDialog):
@@ -41,29 +39,29 @@ class ExportDialog(QDialog):
         layout = QVBoxLayout(self)
 
         scope_row = QHBoxLayout()
-        scope_row.addWidget(QLabel("Kapsam:"))
+        scope_row.addWidget(QLabel("Scope:"))
         self.scope_combo = QComboBox()
-        self.scope_combo.addItems(["Aktif görüntü", "Açık tüm görüntüler"])
+        self.scope_combo.addItems(["Active image", "All open images"])
         scope_row.addWidget(self.scope_combo, 1)
         layout.addLayout(scope_row)
 
         out_row = QHBoxLayout()
         self.out_dir_edit = QLineEdit()
-        self.out_dir_edit.setPlaceholderText("Çıktı klasörü seç...")
-        out_browse = QPushButton("Klasör Seç...")
+        self.out_dir_edit.setPlaceholderText("Select output folder...")
+        out_browse = QPushButton("Select Folder...")
         out_browse.clicked.connect(self._browse_out_dir)
         out_row.addWidget(self.out_dir_edit, 1)
         out_row.addWidget(out_browse)
         layout.addLayout(out_row)
 
-        visual_box = QGroupBox("Görsel Export")
+        visual_box = QGroupBox("Visual Export")
         visual_box.setCheckable(True)
         visual_box.setChecked(True)
         self.visual_box = visual_box
         v_layout = QVBoxLayout(visual_box)
-        self.radio_full = QRadioButton("Tam görüntü ({isim}_detections.<uzantı>)")
+        self.radio_full = QRadioButton("Full image ({name}_detections.<ext>)")
         self.radio_full.setChecked(True)
-        self.radio_tiles = QRadioButton("640x640 kesitler ({isim}_tile_rXXX_cXXX_640x640.<uzantı>)")
+        self.radio_tiles = QRadioButton("640x640 tiles ({name}_tile_rXXX_cXXX_640x640.<ext>)")
         v_layout.addWidget(self.radio_full)
         v_layout.addWidget(self.radio_tiles)
         fmt_row = QHBoxLayout()
@@ -74,7 +72,7 @@ class ExportDialog(QDialog):
         v_layout.addLayout(fmt_row)
         layout.addWidget(visual_box)
 
-        vector_box = QGroupBox("CBS (Coğrafi Bilgi Sistemi) Export — tespitlerin son hali")
+        vector_box = QGroupBox("GIS Export — final state of detections")
         vector_box.setCheckable(True)
         vector_box.setChecked(True)
         self.vector_box = vector_box
@@ -97,7 +95,7 @@ class ExportDialog(QDialog):
         layout.addWidget(buttons)
 
     def _browse_out_dir(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Çıktı klasörü seç")
+        directory = QFileDialog.getExistingDirectory(self, "Select output folder")
         if directory:
             self.out_dir_edit.setText(directory)
 
@@ -110,15 +108,15 @@ class ExportDialog(QDialog):
     def _on_export(self) -> None:
         out_dir_str = self.out_dir_edit.text().strip()
         if not out_dir_str:
-            QMessageBox.warning(self, "Eksik bilgi", "Lütfen bir çıktı klasörü seçin.")
+            QMessageBox.warning(self, "Missing information", "Please select an output folder.")
             return
         out_dir = Path(out_dir_str)
         rasters = self._selected_rasters()
         if not rasters:
-            QMessageBox.warning(self, "Eksik bilgi", "Export edilecek açık bir görüntü yok.")
+            QMessageBox.warning(self, "Missing information", "No open image to export.")
             return
         if not self.visual_box.isChecked() and not self.vector_box.isChecked():
-            QMessageBox.warning(self, "Eksik bilgi", "En az bir export türü (Görsel veya CBS) seçin.")
+            QMessageBox.warning(self, "Missing information", "Select at least one export type (Visual or GIS).")
             return
 
         formats = set()
@@ -132,7 +130,7 @@ class ExportDialog(QDialog):
             if self.gpkg_checkbox.isChecked():
                 formats.add("gpkg")
             if not formats:
-                QMessageBox.warning(self, "Eksik bilgi", "CBS export için en az bir format seçin.")
+                QMessageBox.warning(self, "Missing information", "Select at least one format for GIS export.")
                 return
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -147,28 +145,28 @@ class ExportDialog(QDialog):
                             outputs.append(export_manager.export_visual_full(pr, out_dir, self.project_state.classes, ext=ext))
                         else:
                             outputs.extend(export_manager.export_visual_tiles(pr, out_dir, self.project_state.classes, ext=ext))
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         errors.append(f"{pr.name}: {exc}")
 
             if self.vector_box.isChecked():
                 try:
                     stem = rasters[0].path.stem if len(rasters) == 1 else "all_images"
                     outputs.extend(export_manager.export_vector(rasters, self.project_state.classes, out_dir, stem, formats))
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"CBS export: {exc}")
+                except Exception as exc:
+                    errors.append(f"GIS export: {exc}")
         finally:
             QApplication.restoreOverrideCursor()
 
         self._last_out_dir = out_dir
-        message = f"{len(outputs)} dosya oluşturuldu:\n" + "\n".join(p.name for p in outputs[:20])
+        message = f"{len(outputs)} files created:\n" + "\n".join(p.name for p in outputs[:20])
         if len(outputs) > 20:
-            message += f"\n... (+{len(outputs) - 20} dosya daha)"
+            message += f"\n... (+{len(outputs) - 20} more files)"
         if errors:
-            message += "\n\nHatalar:\n" + "\n".join(errors)
+            message += "\n\nErrors:\n" + "\n".join(errors)
         box = QMessageBox(self)
-        box.setWindowTitle("Export tamamlandı" if not errors else "Export kısmen tamamlandı")
+        box.setWindowTitle("Export complete" if not errors else "Export partially complete")
         box.setText(message)
-        open_btn = box.addButton("Klasörü Aç", QMessageBox.ButtonRole.ActionRole)
+        open_btn = box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Ok)
         box.exec()
         if box.clickedButton() == open_btn:

@@ -1,5 +1,3 @@
-"""'Model Yükle' diyaloğu: .pt seçimi, data.yaml override, manuel sınıf düzenleme."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,7 +28,7 @@ _PRESET_LABELS = [("single", "Single-class"), ("3class", "3-class"), ("6class", 
 class ModelLoadDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Model Yükle")
+        self.setWindowTitle("Load Model")
         self.resize(560, 500)
 
         self.model_path: Optional[Path] = None
@@ -43,20 +41,20 @@ class ModelLoadDialog(QDialog):
         model_row = QHBoxLayout()
         self.model_path_edit = QLineEdit()
         self.model_path_edit.setReadOnly(True)
-        self.model_path_edit.setPlaceholderText("Henüz model seçilmedi...")
-        browse_btn = QPushButton("Model dosyası seç (.pt)...")
+        self.model_path_edit.setPlaceholderText("No model selected yet...")
+        browse_btn = QPushButton("Select model file (.pt)...")
         browse_btn.clicked.connect(self._browse_model)
         model_row.addWidget(self.model_path_edit, 1)
         model_row.addWidget(browse_btn)
         layout.addLayout(model_row)
 
         yaml_row = QHBoxLayout()
-        self.use_yaml_checkbox = QCheckBox("data.yaml kullan")
+        self.use_yaml_checkbox = QCheckBox("Use data.yaml")
         self.use_yaml_checkbox.toggled.connect(self._on_yaml_toggle)
         self.yaml_path_edit = QLineEdit()
         self.yaml_path_edit.setReadOnly(True)
         self.yaml_path_edit.setEnabled(False)
-        self.yaml_browse_btn = QPushButton("Seç...")
+        self.yaml_browse_btn = QPushButton("Select...")
         self.yaml_browse_btn.setEnabled(False)
         self.yaml_browse_btn.clicked.connect(self._browse_yaml)
         yaml_row.addWidget(self.use_yaml_checkbox)
@@ -65,7 +63,7 @@ class ModelLoadDialog(QDialog):
         layout.addLayout(yaml_row)
 
         preset_row = QHBoxLayout()
-        preset_row.addWidget(QLabel("Hazır senaryo (makale):"))
+        preset_row.addWidget(QLabel("Preset (paper):"))
         for key, label in _PRESET_LABELS:
             btn = QPushButton(label)
             btn.clicked.connect(lambda _checked=False, k=key: self._apply_preset(k))
@@ -73,16 +71,16 @@ class ModelLoadDialog(QDialog):
         preset_row.addStretch(1)
         layout.addLayout(preset_row)
 
-        layout.addWidget(QLabel("Sınıflar (elle düzenlenebilir):"))
+        layout.addWidget(QLabel("Classes (editable):"))
         self.class_table = QTableWidget(0, 2)
-        self.class_table.setHorizontalHeaderLabels(["ID", "İsim"])
+        self.class_table.setHorizontalHeaderLabels(["ID", "Name"])
         self.class_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.class_table, 1)
 
         class_btn_row = QHBoxLayout()
-        add_btn = QPushButton("+ Sınıf Ekle")
+        add_btn = QPushButton("+ Add Class")
         add_btn.clicked.connect(self._add_class_row)
-        remove_btn = QPushButton("Seçileni Sil")
+        remove_btn = QPushButton("Delete Selected")
         remove_btn.clicked.connect(self._remove_selected_rows)
         class_btn_row.addWidget(add_btn)
         class_btn_row.addWidget(remove_btn)
@@ -94,9 +92,8 @@ class ModelLoadDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    # --- eylemler ------------------------------------------------------
     def _browse_model(self) -> None:
-        path_str, _ = QFileDialog.getOpenFileName(self, "Model dosyası seç", "", "YOLO Model (*.pt)")
+        path_str, _ = QFileDialog.getOpenFileName(self, "Select model file", "", "YOLO Model (*.pt)")
         if not path_str:
             return
         path = Path(path_str)
@@ -106,7 +103,7 @@ class ModelLoadDialog(QDialog):
             loaded = load_model(path)
         except Exception as exc:
             QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Hata", f"Model yüklenemedi:\n{exc}")
+            QMessageBox.critical(self, "Error", f"Could not load model:\n{exc}")
             return
         QApplication.restoreOverrideCursor()
 
@@ -117,7 +114,7 @@ class ModelLoadDialog(QDialog):
             self._set_classes(loaded.names)
 
     def _browse_yaml(self) -> None:
-        path_str, _ = QFileDialog.getOpenFileName(self, "data.yaml seç", "", "YAML (*.yaml *.yml)")
+        path_str, _ = QFileDialog.getOpenFileName(self, "Select data.yaml", "", "YAML (*.yaml *.yml)")
         if not path_str:
             return
         path = Path(path_str)
@@ -125,7 +122,7 @@ class ModelLoadDialog(QDialog):
         try:
             names = parse_data_yaml(path)
         except Exception as exc:
-            QMessageBox.critical(self, "Hata", f"data.yaml okunamadı:\n{exc}")
+            QMessageBox.critical(self, "Error", f"Could not read data.yaml:\n{exc}")
             return
         self._set_classes(names)
 
@@ -159,7 +156,7 @@ class ModelLoadDialog(QDialog):
 
     def _on_accept(self) -> None:
         if self.model_path is None or self.loaded_model is None:
-            QMessageBox.warning(self, "Eksik bilgi", "Lütfen bir model (.pt) dosyası seçin.")
+            QMessageBox.warning(self, "Missing information", "Please select a model (.pt) file.")
             return
         classes: dict[int, str] = {}
         for row in range(self.class_table.rowCount()):
@@ -173,7 +170,7 @@ class ModelLoadDialog(QDialog):
                 continue
             classes[class_id] = name_item.text().strip() or f"class_{class_id}"
         if not classes:
-            QMessageBox.warning(self, "Eksik bilgi", "En az bir sınıf tanımlı olmalı.")
+            QMessageBox.warning(self, "Missing information", "At least one class must be defined.")
             return
         self.classes = classes
         self.accept()

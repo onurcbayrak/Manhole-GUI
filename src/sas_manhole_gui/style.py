@@ -1,5 +1,7 @@
-"""Uygulama genelinde kullanılan renk paleti ve QSS stili."""
-
+SUCCESS = "#3ddc97"
+SAM_COLOR = "#c77dff"
+WARNING = "#ffb84f"
+DANGER = "#ff5c5c"
 BG_DARK = "#1e2126"
 BG_PANEL = "#262a31"
 BG_PANEL_ALT = "#2c313a"
@@ -9,18 +11,17 @@ ACCENT_HOVER = "#6ea0ff"
 TEXT = "#e6e8eb"
 TEXT_DIM = "#9aa0a8"
 
-# Sınıf kutuları için tekrar eden renk paleti (sınıf sayısı bunu aşarsa döngüye girer).
 CLASS_COLORS = [
-    "#ff5c5c",  # kırmızı
-    "#4f8cff",  # mavi
-    "#3ddc97",  # yeşil
-    "#ffb84f",  # turuncu
-    "#c77dff",  # mor
-    "#4fd8ff",  # camgöbeği
-    "#ffd93d",  # sarı
-    "#ff7ab6",  # pembe
-    "#8bc34a",  # açık yeşil
-    "#b0bec5",  # gri-mavi
+    "#ff5c5c",
+    "#4f8cff",
+    "#3ddc97",
+    "#ffb84f",
+    "#c77dff",
+    "#4fd8ff",
+    "#ffd93d",
+    "#ff7ab6",
+    "#8bc34a",
+    "#b0bec5",
 ]
 
 APP_STYLESHEET = f"""
@@ -55,7 +56,7 @@ QToolBar {{
 QToolButton {{
     background: transparent;
     border-radius: 6px;
-    padding: 6px 10px;
+    padding: 6px 12px;
     color: {TEXT};
 }}
 QToolButton:hover {{
@@ -65,10 +66,74 @@ QToolButton:pressed, QToolButton:checked {{
     background: {ACCENT};
     color: white;
 }}
+QToolButton:disabled {{
+    color: {TEXT_DIM};
+}}
+QToolButton#primaryToolButton {{
+    background: {ACCENT};
+    color: white;
+    font-weight: 600;
+    padding: 6px 16px;
+}}
+QToolButton#primaryToolButton:hover {{
+    background: {ACCENT_HOVER};
+}}
+QToolButton#primaryToolButton:disabled {{
+    background: {BG_PANEL_ALT};
+    color: {TEXT_DIM};
+}}
+QToolBar::separator {{
+    background: {BORDER};
+    width: 1px;
+    margin: 6px 6px;
+}}
 
 QStatusBar {{
     background: {BG_PANEL};
     border-top: 1px solid {BORDER};
+    padding: 2px 6px;
+}}
+QStatusBar::item {{
+    border: none;
+}}
+QPushButton#statusPauseButton {{
+    background: {BG_PANEL_ALT};
+    border: 1px solid {BORDER};
+    border-radius: 4px;
+    padding: 3px 12px;
+    color: {TEXT};
+    min-width: 66px;
+}}
+QPushButton#statusPauseButton:hover {{
+    border-color: {ACCENT};
+    color: {ACCENT_HOVER};
+}}
+QPushButton#statusPauseButton:disabled {{
+    color: {TEXT_DIM};
+    border-color: {BORDER};
+}}
+QPushButton#statusStopButton {{
+    background: {BG_PANEL_ALT};
+    border: 1px solid {BORDER};
+    border-radius: 4px;
+    padding: 3px 12px;
+    color: {TEXT};
+    min-width: 60px;
+}}
+QPushButton#statusStopButton:hover {{
+    border-color: {DANGER};
+    color: {DANGER};
+}}
+QPushButton#statusStopButton:disabled {{
+    color: {TEXT_DIM};
+    border-color: {BORDER};
+}}
+QLabel#statusDivider {{
+    color: {BORDER};
+    padding: 0 4px;
+}}
+QLabel#statusHint {{
+    color: {TEXT_DIM};
 }}
 
 QListWidget, QTreeWidget, QTableWidget {{
