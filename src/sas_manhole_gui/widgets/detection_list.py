@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -24,6 +24,7 @@ class DetectionListPanel(QWidget):
         self.project_state = project_state
         self._raster_path: str | None = None
         self._suppress_combo_signal = False
+        self._refresh_pending = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -68,8 +69,14 @@ class DetectionListPanel(QWidget):
         self.refresh()
 
     def _on_detections_changed(self, path: str) -> None:
-        if path == self._raster_path:
-            self.refresh()
+        if path != self._raster_path or self._refresh_pending:
+            return
+        self._refresh_pending = True
+        QTimer.singleShot(0, self._deferred_refresh)
+
+    def _deferred_refresh(self) -> None:
+        self._refresh_pending = False
+        self.refresh()
 
     def _on_classes_changed(self) -> None:
         self._refresh_class_combo()
@@ -85,6 +92,8 @@ class DetectionListPanel(QWidget):
             self._suppress_combo_signal = False
 
     def refresh(self) -> None:
+        previous_id = self._selected_det_id()
+        self.list_widget.blockSignals(True)
         self.list_widget.clear()
         pr = self.project_state.rasters.get(self._raster_path) if self._raster_path else None
         detections = pr.detections if pr else []
@@ -102,6 +111,10 @@ class DetectionListPanel(QWidget):
             item = QListWidgetItem(QIcon(pix), label)
             item.setData(Qt.ItemDataRole.UserRole, det.det_id)
             self.list_widget.addItem(item)
+            if det.det_id == previous_id:
+                self.list_widget.setCurrentItem(item)
+                item.setSelected(True)
+        self.list_widget.blockSignals(False)
         self._update_action_state()
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:

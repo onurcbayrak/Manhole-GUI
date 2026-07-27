@@ -47,6 +47,7 @@ class ThumbnailPanel(QWidget):
         layout.addLayout(btn_row)
 
         self._items_by_path: dict[str, QListWidgetItem] = {}
+        self._badge_state: dict[str, tuple[bool, bool]] = {}
         self._syncing_selection = False
 
         project_state.rasters_changed.connect(self.refresh)
@@ -59,11 +60,14 @@ class ThumbnailPanel(QWidget):
     def refresh(self) -> None:
         self.list_widget.clear()
         self._items_by_path.clear()
+        self._badge_state.clear()
         for path, pr in self.project_state.rasters.items():
             item = QListWidgetItem(pr.name)
             item.setData(Qt.ItemDataRole.UserRole, path)
             item.setToolTip(path)
-            item.setIcon(self._build_icon(pr.thumbnail, pr.inference_done, len(pr.detections) > 0))
+            state = (pr.inference_done, len(pr.detections) > 0)
+            item.setIcon(self._build_icon(pr.thumbnail, state[0], state[1]))
+            self._badge_state[path] = state
             self.list_widget.addItem(item)
             self._items_by_path[path] = item
         self._sync_selection(self.project_state.active_raster_path or "")
@@ -74,7 +78,11 @@ class ThumbnailPanel(QWidget):
         pr = self.project_state.rasters.get(path)
         if item is None or pr is None:
             return
-        item.setIcon(self._build_icon(pr.thumbnail, pr.inference_done, len(pr.detections) > 0))
+        state = (pr.inference_done, len(pr.detections) > 0)
+        if self._badge_state.get(path) == state:
+            return
+        self._badge_state[path] = state
+        item.setIcon(self._build_icon(pr.thumbnail, state[0], state[1]))
 
     def _build_icon(self, thumbnail, done: bool, has_detections: bool) -> QIcon:
         base = QPixmap.fromImage(thumbnail) if thumbnail is not None else QPixmap(96, 96)

@@ -586,14 +586,24 @@ class MainWindow(QMainWindow):
         if det_id is not None:
             self.project_state.remove_detection(path, det_id)
             return
-        for item in self.canvas.scene_.selectedItems():
-            from sas_manhole_gui.canvas import SamRegionItem
-            from sas_manhole_gui.detection_item import DetectionItem
 
-            if isinstance(item, DetectionItem):
-                self.project_state.remove_detection(path, item.det_id)
-            elif isinstance(item, SamRegionItem):
-                self.project_state.remove_sam_region(path, item.region_id)
+        from sas_manhole_gui.canvas import SamRegionItem
+        from sas_manhole_gui.detection_item import DetectionItem
+
+        det_ids: list[int] = []
+        region_ids: list[int] = []
+        for item in list(self.canvas.scene_.selectedItems()):
+            try:
+                if isinstance(item, DetectionItem):
+                    det_ids.append(item.det_id)
+                elif isinstance(item, SamRegionItem):
+                    region_ids.append(item.region_id)
+            except RuntimeError:
+                continue
+        for did in det_ids:
+            self.project_state.remove_detection(path, did)
+        for rid in region_ids:
+            self.project_state.remove_sam_region(path, rid)
 
     def _on_run(self) -> None:
         if self.project_state.model is None:

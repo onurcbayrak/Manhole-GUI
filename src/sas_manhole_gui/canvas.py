@@ -104,6 +104,9 @@ class RasterCanvas(QGraphicsView):
         self._sam_items: dict[int, SamRegionItem] = {}
         self._h_crosshair: Optional[QGraphicsLineItem] = None
         self._v_crosshair: Optional[QGraphicsLineItem] = None
+        self._syncing = False
+        self._detection_sync_pending = False
+        self._sam_sync_pending = False
 
         self._lod_timer = QTimer(self)
         self._lod_timer.setSingleShot(True)
@@ -131,9 +134,18 @@ class RasterCanvas(QGraphicsView):
 
     def set_active_raster(self, path: str) -> None:
         self._raster_path = path or None
-        self.scene_.clear()
+        self._cancel_draw()
+        self._panning = False
+        self._pan_start = None
+        self._syncing = True
+        try:
+            self.scene_.clear()
+        finally:
+            self._syncing = False
         self._detection_items.clear()
         self._sam_items.clear()
+        self._detection_sync_pending = False
+        self._sam_sync_pending = False
         self._h_crosshair = None
         self._v_crosshair = None
         self._base_item = None
@@ -235,40 +247,103 @@ class RasterCanvas(QGraphicsView):
     def _on_detections_changed(self, raster_path: str) -> None:
         if raster_path != self._raster_path:
             return
+        if self._detection_sync_pending:
+            return
+        self._detection_sync_pending = True
         QTimer.singleShot(0, self._sync_detection_items)
 
     def _on_sam_regions_changed(self, raster_path: str) -> None:
         if raster_path != self._raster_path:
             return
+        if self._sam_sync_pending:
+            return
+        self._sam_sync_pending = True
         QTimer.singleShot(0, self._sync_sam_items)
 
+    def _detection_label(self, det: Detection) -> str:
+        name = self.project_state.class_name(det.class_id)
+        return f"{name} {det.confidence:.2f}" if det.source == "model" else name
+
     def _sync_detection_items(self) -> None:
-        if self._raster_path is None:
+        self._detection_sync_pending = False
+        if self._raster_path is None or self._syncing:
             return
-        for item in list(self._detection_items.values()):
-            self.scene_.removeItem(item)
-        self._detection_items.clear()
-        self._rebuild_detection_items(self._current_detections())
+        self._syncing = True
+        try:
+            detections = self._current_detections()
+            wanted = {d.det_id: d for d in detections}
+
+            for det_id in [i for i in self._detection_items if i not in wanted]:
+                item = self._detection_items.pop(det_id, None)
+                if item is None:
+                    continue
+                try:
+                    item.setSelected(False)
+                    if item.scene() is self.scene_:
+                        self.scene_.removeItem(item)
+                except RuntimeError:
+                    pass
+
+            for det_id, det in wanted.items():
+                item = self._detection_items.get(det_id)
+                if item is None:
+                    self._add_detection_item(det)
+                    continue
+                try:
+                    item.apply_geometry(QRectF(det.x_min, det.y_min, det.width(), det.height()))
+                    item.set_style(self.project_state.class_color(det.class_id), self._detection_label(det))
+                    item.set_hover_enabled(not self._draw_mode)
+                except RuntimeError:
+                    self._detection_items.pop(det_id, None)
+        finally:
+            self._syncing = False
 
     def _sync_sam_items(self) -> None:
-        if self._raster_path is None:
+        self._sam_sync_pending = False
+        if self._raster_path is None or self._syncing:
             return
-        for item in list(self._sam_items.values()):
-            self.scene_.removeItem(item)
-        self._sam_items.clear()
-        self._rebuild_sam_items(self._current_sam_regions())
+        self._syncing = True
+        try:
+            regions = self._current_sam_regions()
+            wanted = {r.region_id: r for r in regions}
+
+            for region_id in [i for i in self._sam_items if i not in wanted]:
+                item = self._sam_items.pop(region_id, None)
+                if item is None:
+                    continue
+                try:
+                    item.setSelected(False)
+                    if item.scene() is self.scene_:
+                        self.scene_.removeItem(item)
+                except RuntimeError:
+                    pass
+
+            for region_id, region in wanted.items():
+                if region_id not in self._sam_items:
+                    self._add_sam_item(region)
+        finally:
+            self._syncing = False
 
     def _on_classes_changed(self) -> None:
-        for det_id, item in self._detection_items.items():
+        for det_id, item in list(self._detection_items.items()):
             det = self._find_detection(det_id)
             if det is None:
                 continue
-            name = self.project_state.class_name(det.class_id)
-            label = f"{name} {det.confidence:.2f}" if det.source == "model" else name
-            item.set_style(self.project_state.class_color(det.class_id), label)
+            try:
+                item.set_style(self.project_state.class_color(det.class_id), self._detection_label(det))
+            except RuntimeError:
+                self._detection_items.pop(det_id, None)
 
     def _emit_selection(self) -> None:
-        selected = [item.det_id for item in self.scene_.selectedItems() if isinstance(item, DetectionItem)]
+        if self._syncing:
+            return
+        selected = []
+        for item in self.scene_.selectedItems():
+            if isinstance(item, DetectionItem):
+                try:
+                    selected.append(item.det_id)
+                except RuntimeError:
+                    continue
         self.detection_selected.emit(selected[0] if selected else None)
 
     def select_detection(self, det_id: Optional[int]) -> None:
@@ -462,15 +537,22 @@ class RasterCanvas(QGraphicsView):
 
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            handled = False
+            det_ids = []
+            region_ids = []
             for item in list(self.scene_.selectedItems()):
-                if isinstance(item, DetectionItem):
-                    self._handle_item_delete(item.det_id)
-                    handled = True
-                elif isinstance(item, SamRegionItem) and self._raster_path is not None:
-                    self.project_state.remove_sam_region(self._raster_path, item.region_id)
-                    handled = True
-            if handled:
+                try:
+                    if isinstance(item, DetectionItem):
+                        det_ids.append(item.det_id)
+                    elif isinstance(item, SamRegionItem):
+                        region_ids.append(item.region_id)
+                except RuntimeError:
+                    continue
+            if det_ids or region_ids:
+                for det_id in det_ids:
+                    self._handle_item_delete(det_id)
+                if self._raster_path is not None:
+                    for region_id in region_ids:
+                        self.project_state.remove_sam_region(self._raster_path, region_id)
                 event.accept()
                 return
         super().keyPressEvent(event)

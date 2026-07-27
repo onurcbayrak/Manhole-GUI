@@ -67,6 +67,17 @@ class DetectionItem(QGraphicsRectItem):
         self._label = label
         self.update()
 
+    def is_interacting(self) -> bool:
+        return self._drag_mode is not None
+
+    def apply_geometry(self, rect: QRectF) -> None:
+        if self._drag_mode is not None:
+            return
+        if self.rect() == rect:
+            return
+        self.prepareGeometryChange()
+        self.setRect(rect)
+
     def set_hover_enabled(self, enabled: bool) -> None:
         self._hover_enabled = enabled
         self.setAcceptHoverEvents(enabled)
@@ -214,16 +225,24 @@ class DetectionItem(QGraphicsRectItem):
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         had_drag = self._drag_mode is not None
+        start_rect = self._drag_start_rect
         self._drag_mode = None
         self._active_handle = None
         self._drag_start_scene = None
         self._drag_start_rect = None
-        if had_drag and self._on_change is not None:
-            self._on_change(self.det_id, self.rect())
         event.accept()
+        if not had_drag or self._on_change is None:
+            return
+        current = QRectF(self.rect())
+        if start_rect is not None and start_rect == current:
+            return
+        self._on_change(self.det_id, current)
 
     def contextMenuEvent(self, event: QGraphicsSceneContextMenuEvent) -> None:
         self.setSelected(True)
+        det_id = self.det_id
+        on_delete = self._on_delete
+        on_class_change = self._on_class_change
         menu = QMenu()
         delete_action = menu.addAction("Delete")
         class_menu = menu.addMenu("Change Class")
@@ -233,9 +252,10 @@ class DetectionItem(QGraphicsRectItem):
                 act = class_menu.addAction(name)
                 class_actions[act] = class_id
         chosen = menu.exec(event.screenPos())
+        event.accept()
         if chosen is None:
             return
-        if chosen == delete_action and self._on_delete:
-            self._on_delete(self.det_id)
-        elif chosen in class_actions and self._on_class_change:
-            self._on_class_change(self.det_id, class_actions[chosen])
+        if chosen == delete_action and on_delete:
+            on_delete(det_id)
+        elif chosen in class_actions and on_class_change:
+            on_class_change(det_id, class_actions[chosen])
