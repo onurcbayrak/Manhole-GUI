@@ -46,7 +46,7 @@ manhole-gui
 ### Option B — Install from source (for development)
 
 ```bash
-git clone https://github.com/<your-github-username>/Manhole-GUI.git
+git clone https://github.com/onurcbayrak/Manhole-GUI.git
 cd Manhole-GUI
 python -m venv .venv
 .venv\Scripts\activate
