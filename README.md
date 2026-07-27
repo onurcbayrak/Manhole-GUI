@@ -4,8 +4,6 @@ Desktop review and editing interface for **manhole / storm-drain / rectangular-c
 aerial orthophotos, using YOLO-family models (SAS-enhanced) and optional SAM3 text-prompted
 semantic segmentation as a pre-filter.
 
-Trained model for 3-class detection is available at [https://drive.google.com/drive/folders/1oapSEidRO8DWbKJPot3Woxi6LxXWHUmu
-](https://drive.google.com/drive/folders/1XLGZWq3FYOB0ptJe4uN2nfPjQDLJTTez)
 ---
 
 ## Features
