@@ -6,6 +6,7 @@ aerial orthophotos, using YOLO-family models (SAS-enhanced) and optional SAM3 te
 semantic segmentation as a pre-filter.
 
 Trained model for 3-class detection can be downloaded from https://drive.google.com/drive/folders/1XLGZWq3FYOB0ptJe4uN2nfPjQDLJTTez
+
 All trained models and the code of SAS will be publicly available upon publication.
 
 ---
