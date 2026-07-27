@@ -56,6 +56,8 @@ class DetectionItem(QGraphicsRectItem):
         self._classes_provider = classes_provider
         self._hovered = False
         self._hover_enabled = True
+        self._scale = 1.0
+        self._disposed = False
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
@@ -70,15 +72,39 @@ class DetectionItem(QGraphicsRectItem):
     def is_interacting(self) -> bool:
         return self._drag_mode is not None
 
+    def prepare_dispose(self) -> None:
+        self._disposed = True
+        self._drag_mode = None
+        self._active_handle = None
+        self._drag_start_scene = None
+        self._drag_start_rect = None
+        self._hovered = False
+        self._on_change = None
+        self._on_delete = None
+        self._on_class_change = None
+        self._classes_provider = None
+        self.setAcceptHoverEvents(False)
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+
     def apply_geometry(self, rect: QRectF) -> None:
-        if self._drag_mode is not None:
+        if self._disposed or self._drag_mode is not None:
             return
         if self.rect() == rect:
             return
         self.prepareGeometryChange()
         self.setRect(rect)
 
+    def set_view_scale(self, scale: float) -> None:
+        scale = max(float(scale), 0.0001)
+        if abs(scale - self._scale) < 1e-9:
+            return
+        self.prepareGeometryChange()
+        self._scale = scale
+
     def set_hover_enabled(self, enabled: bool) -> None:
+        if self._disposed:
+            return
         self._hover_enabled = enabled
         self.setAcceptHoverEvents(enabled)
         if not enabled and self._hovered:
@@ -86,19 +112,18 @@ class DetectionItem(QGraphicsRectItem):
             self.update()
 
     def _view_scale(self) -> float:
-        scene = self.scene()
-        if scene is not None:
-            views = scene.views()
-            if views:
-                return max(views[0].transform().m11(), 0.0001)
-        return 1.0
+        return self._scale
 
     def _handle_radius(self) -> float:
-        return max(3.0, 7.0 / self._view_scale())
+        return max(3.0, 7.0 / self._scale)
+
+    def _font_size(self) -> float:
+        return max(6.0, 10.0 / self._scale)
 
     def boundingRect(self) -> QRectF:
-        margin = self._handle_radius() + 4
-        return self.rect().adjusted(-margin, -margin - 20 / self._view_scale(), margin, margin)
+        margin = self._handle_radius() + 4.0
+        label_h = self._font_size() * 1.7
+        return self.rect().adjusted(-margin, -margin - label_h, margin, margin)
 
     def _handle_points(self, r: QRectF) -> dict[str, QPointF]:
         cx, cy = r.center().x(), r.center().y()
@@ -124,8 +149,10 @@ class DetectionItem(QGraphicsRectItem):
         return None
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: Optional[QWidget] = None) -> None:
+        if self._disposed:
+            return
         r = self.rect()
-        scale = self._view_scale()
+        scale = self._scale
         pen_width = max(1.0, 2.0 / scale)
         if self._hovered and not self.isSelected():
             pen_width *= 1.6
@@ -141,7 +168,7 @@ class DetectionItem(QGraphicsRectItem):
             painter.drawRect(r)
 
         font = painter.font()
-        font_size = max(6.0, 10.0 / scale)
+        font_size = self._font_size()
         font.setPointSizeF(font_size)
         painter.setFont(font)
         label_h = font_size * 1.7
@@ -161,7 +188,7 @@ class DetectionItem(QGraphicsRectItem):
                 painter.drawEllipse(pt, hr, hr)
 
     def hoverEnterEvent(self, event: QGraphicsSceneHoverEvent) -> None:
-        if self._hover_enabled:
+        if self._hover_enabled and not self._disposed:
             self._hovered = True
             self.update()
         super().hoverEnterEvent(event)
@@ -173,6 +200,9 @@ class DetectionItem(QGraphicsRectItem):
         super().hoverLeaveEvent(event)
 
     def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:
+        if self._disposed:
+            super().hoverMoveEvent(event)
+            return
         handle = self._handle_at(event.pos())
         if handle:
             self.setCursor(QCursor(self._CURSORS[handle]))
@@ -183,6 +213,9 @@ class DetectionItem(QGraphicsRectItem):
         super().hoverMoveEvent(event)
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        if self._disposed:
+            event.ignore()
+            return
         if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             self.setSelected(True)
             if event.button() == Qt.MouseButton.LeftButton:
@@ -196,7 +229,7 @@ class DetectionItem(QGraphicsRectItem):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:
-        if self._drag_mode is None or self._drag_start_scene is None or self._drag_start_rect is None:
+        if self._disposed or self._drag_mode is None or self._drag_start_scene is None or self._drag_start_rect is None:
             super().mouseMoveEvent(event)
             return
         delta = event.scenePos() - self._drag_start_scene
@@ -239,6 +272,9 @@ class DetectionItem(QGraphicsRectItem):
         self._on_change(self.det_id, current)
 
     def contextMenuEvent(self, event: QGraphicsSceneContextMenuEvent) -> None:
+        if self._disposed:
+            event.ignore()
+            return
         self.setSelected(True)
         det_id = self.det_id
         on_delete = self._on_delete

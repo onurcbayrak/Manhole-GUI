@@ -582,28 +582,23 @@ class MainWindow(QMainWindow):
         pr = self.project_state.active_raster
         if pr is None:
             return
-        det_id = self.detection_list._selected_det_id()
-        if det_id is not None:
-            self.project_state.remove_detection(path, det_id)
+        det_ids, region_ids = self.canvas.selected_ids()
+
+        panel_id = self.detection_list._selected_det_id()
+        if panel_id is not None and panel_id not in det_ids:
+            det_ids.append(panel_id)
+
+        if not det_ids and not region_ids:
             return
 
-        from sas_manhole_gui.canvas import SamRegionItem
-        from sas_manhole_gui.detection_item import DetectionItem
-
-        det_ids: list[int] = []
-        region_ids: list[int] = []
-        for item in list(self.canvas.scene_.selectedItems()):
-            try:
-                if isinstance(item, DetectionItem):
-                    det_ids.append(item.det_id)
-                elif isinstance(item, SamRegionItem):
-                    region_ids.append(item.region_id)
-            except RuntimeError:
-                continue
+        existing = {d.det_id for d in pr.detections}
         for did in det_ids:
-            self.project_state.remove_detection(path, did)
+            if did in existing:
+                self.project_state.remove_detection(path, did)
+        existing_regions = {r.region_id for r in pr.sam_regions}
         for rid in region_ids:
-            self.project_state.remove_sam_region(path, rid)
+            if rid in existing_regions:
+                self.project_state.remove_sam_region(path, rid)
 
     def _on_run(self) -> None:
         if self.project_state.model is None:

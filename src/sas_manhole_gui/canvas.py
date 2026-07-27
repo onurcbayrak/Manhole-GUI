@@ -87,6 +87,7 @@ class RasterCanvas(QGraphicsView):
         self.project_state = project_state
 
         self.scene_ = QGraphicsScene(self)
+        self.scene_.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self.setScene(self.scene_)
         self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         self.setBackgroundBrush(QColor(BG_DARK))
@@ -107,6 +108,11 @@ class RasterCanvas(QGraphicsView):
         self._syncing = False
         self._detection_sync_pending = False
         self._sam_sync_pending = False
+        self._trash: list = []
+        self._trash_timer = QTimer(self)
+        self._trash_timer.setSingleShot(True)
+        self._trash_timer.setInterval(400)
+        self._trash_timer.timeout.connect(self._empty_trash)
 
         self._lod_timer = QTimer(self)
         self._lod_timer.setSingleShot(True)
@@ -139,11 +145,18 @@ class RasterCanvas(QGraphicsView):
         self._pan_start = None
         self._syncing = True
         try:
+            for item in list(self._detection_items.values()) + list(self._sam_items.values()):
+                try:
+                    if hasattr(item, "prepare_dispose"):
+                        item.prepare_dispose()
+                except RuntimeError:
+                    pass
+            self._detection_items.clear()
+            self._sam_items.clear()
             self.scene_.clear()
         finally:
             self._syncing = False
-        self._detection_items.clear()
-        self._sam_items.clear()
+        self._trash.clear()
         self._detection_sync_pending = False
         self._sam_sync_pending = False
         self._h_crosshair = None
@@ -174,6 +187,7 @@ class RasterCanvas(QGraphicsView):
         if self._draw_mode:
             self._ensure_crosshair()
         self.fitInView(self.scene_.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._propagate_view_scale()
         self._schedule_lod_refresh()
 
     def _current_detections(self) -> list[Detection]:
@@ -213,6 +227,7 @@ class RasterCanvas(QGraphicsView):
             on_class_change=self._handle_item_class_change,
             classes_provider=self._classes_for_menu,
         )
+        item.set_view_scale(self.transform().m11())
         item.set_hover_enabled(not self._draw_mode)
         self.scene_.addItem(item)
         self._detection_items[det.det_id] = item
@@ -264,6 +279,24 @@ class RasterCanvas(QGraphicsView):
         name = self.project_state.class_name(det.class_id)
         return f"{name} {det.confidence:.2f}" if det.source == "model" else name
 
+    def _retire_item(self, item) -> None:
+        if item is None:
+            return
+        try:
+            if hasattr(item, "prepare_dispose"):
+                item.prepare_dispose()
+            item.setSelected(False)
+            item.setVisible(False)
+            if item.scene() is self.scene_:
+                self.scene_.removeItem(item)
+        except RuntimeError:
+            return
+        self._trash.append(item)
+        self._trash_timer.start()
+
+    def _empty_trash(self) -> None:
+        self._trash.clear()
+
     def _sync_detection_items(self) -> None:
         self._detection_sync_pending = False
         if self._raster_path is None or self._syncing:
@@ -274,22 +307,16 @@ class RasterCanvas(QGraphicsView):
             wanted = {d.det_id: d for d in detections}
 
             for det_id in [i for i in self._detection_items if i not in wanted]:
-                item = self._detection_items.pop(det_id, None)
-                if item is None:
-                    continue
-                try:
-                    item.setSelected(False)
-                    if item.scene() is self.scene_:
-                        self.scene_.removeItem(item)
-                except RuntimeError:
-                    pass
+                self._retire_item(self._detection_items.pop(det_id, None))
 
+            scale = self.transform().m11()
             for det_id, det in wanted.items():
                 item = self._detection_items.get(det_id)
                 if item is None:
                     self._add_detection_item(det)
                     continue
                 try:
+                    item.set_view_scale(scale)
                     item.apply_geometry(QRectF(det.x_min, det.y_min, det.width(), det.height()))
                     item.set_style(self.project_state.class_color(det.class_id), self._detection_label(det))
                     item.set_hover_enabled(not self._draw_mode)
@@ -308,15 +335,7 @@ class RasterCanvas(QGraphicsView):
             wanted = {r.region_id: r for r in regions}
 
             for region_id in [i for i in self._sam_items if i not in wanted]:
-                item = self._sam_items.pop(region_id, None)
-                if item is None:
-                    continue
-                try:
-                    item.setSelected(False)
-                    if item.scene() is self.scene_:
-                        self.scene_.removeItem(item)
-                except RuntimeError:
-                    pass
+                self._retire_item(self._sam_items.pop(region_id, None))
 
             for region_id, region in wanted.items():
                 if region_id not in self._sam_items:
@@ -535,27 +554,18 @@ class RasterCanvas(QGraphicsView):
         super().mouseReleaseEvent(event)
         self._schedule_lod_refresh()
 
-    def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            det_ids = []
-            region_ids = []
-            for item in list(self.scene_.selectedItems()):
-                try:
-                    if isinstance(item, DetectionItem):
-                        det_ids.append(item.det_id)
-                    elif isinstance(item, SamRegionItem):
-                        region_ids.append(item.region_id)
-                except RuntimeError:
-                    continue
-            if det_ids or region_ids:
-                for det_id in det_ids:
-                    self._handle_item_delete(det_id)
-                if self._raster_path is not None:
-                    for region_id in region_ids:
-                        self.project_state.remove_sam_region(self._raster_path, region_id)
-                event.accept()
-                return
-        super().keyPressEvent(event)
+    def selected_ids(self) -> tuple[list[int], list[int]]:
+        det_ids: list[int] = []
+        region_ids: list[int] = []
+        for item in list(self.scene_.selectedItems()):
+            try:
+                if isinstance(item, DetectionItem):
+                    det_ids.append(item.det_id)
+                elif isinstance(item, SamRegionItem):
+                    region_ids.append(item.region_id)
+            except RuntimeError:
+                continue
+        return det_ids, region_ids
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if self._raster is None:
@@ -579,6 +589,7 @@ class RasterCanvas(QGraphicsView):
         if self._raster is None:
             return
         self.fitInView(QRectF(0, 0, self._raster.width, self._raster.height), Qt.AspectRatioMode.KeepAspectRatio)
+        self._propagate_view_scale()
         self._schedule_lod_refresh()
 
     def _apply_zoom(self, factor: float) -> None:
@@ -594,7 +605,16 @@ class RasterCanvas(QGraphicsView):
             self.scale(factor, factor)
         except Exception:
             return
+        self._propagate_view_scale()
         self._schedule_lod_refresh()
+
+    def _propagate_view_scale(self) -> None:
+        scale = self.transform().m11()
+        for det_id, item in list(self._detection_items.items()):
+            try:
+                item.set_view_scale(scale)
+            except RuntimeError:
+                self._detection_items.pop(det_id, None)
 
     def _toolbar_zoom(self, factor: float) -> None:
         cursor_view = self.mapFromGlobal(QCursor.pos())

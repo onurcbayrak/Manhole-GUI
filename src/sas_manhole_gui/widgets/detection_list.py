@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -36,7 +36,6 @@ class DetectionListPanel(QWidget):
         self.list_widget = QListWidget()
         self.list_widget.itemClicked.connect(self._on_item_clicked)
         self.list_widget.currentItemChanged.connect(self._on_current_changed)
-        self.list_widget.installEventFilter(self)
         layout.addWidget(self.list_widget)
 
         class_row = QHBoxLayout()
@@ -56,13 +55,6 @@ class DetectionListPanel(QWidget):
 
         self._refresh_class_combo()
         self._update_action_state()
-
-    def eventFilter(self, obj, event):
-        if obj is self.list_widget and event.type() == QEvent.Type.KeyPress:
-            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-                self._on_delete_selected()
-                return True
-        return super().eventFilter(obj, event)
 
     def _on_active_changed(self, path: str) -> None:
         self._raster_path = path or None
