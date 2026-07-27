@@ -18,6 +18,7 @@ from sas_manhole_gui.project_state import ProjectState
 
 class DetectionListPanel(QWidget):
     detection_activated = Signal(object)
+    active_class_changed = Signal(int)
 
     def __init__(self, project_state: ProjectState, parent=None):
         super().__init__(parent)
@@ -41,6 +42,9 @@ class DetectionListPanel(QWidget):
         class_row = QHBoxLayout()
         class_row.addWidget(QLabel("Class:"))
         self.class_combo = QComboBox()
+        self.class_combo.setToolTip(
+            "Class of the selected detection. With nothing selected this is the class used for new boxes."
+        )
         self.class_combo.currentIndexChanged.connect(self._on_combo_class_changed)
         class_row.addWidget(self.class_combo, 1)
         layout.addLayout(class_row)
@@ -119,7 +123,7 @@ class DetectionListPanel(QWidget):
         item = self.list_widget.currentItem()
         has_selection = item is not None
         self.delete_btn.setEnabled(has_selection)
-        self.class_combo.setEnabled(has_selection and self.class_combo.count() > 0)
+        self.class_combo.setEnabled(self.class_combo.count() > 0)
         if not has_selection:
             return
         det_id = item.data(Qt.ItemDataRole.UserRole)
@@ -133,6 +137,7 @@ class DetectionListPanel(QWidget):
                     self.class_combo.setCurrentIndex(idx)
                 finally:
                     self._suppress_combo_signal = False
+                self.active_class_changed.emit(det.class_id)
 
     def _selected_det_id(self):
         item = self.list_widget.currentItem()
@@ -144,14 +149,30 @@ class DetectionListPanel(QWidget):
             return
         self.project_state.remove_detection(self._raster_path, det_id)
 
+    def current_class_id(self) -> int | None:
+        return self.class_combo.currentData()
+
+    def set_current_class(self, class_id: int) -> None:
+        idx = self.class_combo.findData(class_id)
+        if idx < 0 or idx == self.class_combo.currentIndex():
+            return
+        self._suppress_combo_signal = True
+        try:
+            self.class_combo.setCurrentIndex(idx)
+        finally:
+            self._suppress_combo_signal = False
+
     def _on_combo_class_changed(self, idx: int) -> None:
         if self._suppress_combo_signal or idx < 0:
             return
-        det_id = self._selected_det_id()
-        if det_id is None or self._raster_path is None:
-            return
         class_id = self.class_combo.itemData(idx)
         if class_id is None:
+            return
+
+        self.active_class_changed.emit(class_id)
+
+        det_id = self._selected_det_id()
+        if det_id is None or self._raster_path is None:
             return
         pr = self.project_state.rasters.get(self._raster_path)
         det = next((d for d in pr.detections if d.det_id == det_id), None) if pr else None

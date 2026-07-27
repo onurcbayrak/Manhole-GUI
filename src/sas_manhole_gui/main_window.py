@@ -125,6 +125,8 @@ class MainWindow(QMainWindow):
         self._loader: Optional[RasterOpenWorker] = None
         self._sam_worker: Optional[SamTextWorker] = None
         self._sam_default_path = Path(__file__).resolve().parents[2] / "sam3.pt"
+        self._active_class_id = 0
+        self._syncing_class = False
 
         self.canvas = RasterCanvas(self.project_state, self)
         self.setCentralWidget(self.canvas)
@@ -322,8 +324,10 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         self.canvas.detection_selected.connect(self.detection_list.select_detection)
         self.detection_list.detection_activated.connect(self.canvas.select_detection)
-        self.class_panel.current_class_changed.connect(self._on_draw_class_changed)
+        self.detection_list.active_class_changed.connect(self._on_active_class_changed)
+        self.class_panel.current_class_changed.connect(self._on_active_class_changed)
         self.sam_panel.segment_requested.connect(self._on_sam_segment_requested)
+        self.project_state.classes_changed.connect(self._on_classes_reloaded)
         self.project_state.model_changed.connect(self._on_model_changed)
         self.project_state.sam_model_changed.connect(self._on_sam_model_changed)
         self.project_state.undo_manager.stack_changed.connect(self._on_undo_stack_changed)
@@ -552,7 +556,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "SAM error", message)
 
     def _on_toggle_draw(self, checked: bool) -> None:
-        self.canvas.set_draw_mode(checked, self.class_panel.current_class_id())
+        self.canvas.set_draw_mode(checked, self._active_class_id)
         if checked and self.pan_action.isChecked():
             self.pan_action.setChecked(False)
 
@@ -561,9 +565,26 @@ class MainWindow(QMainWindow):
         if checked and self.draw_action.isChecked():
             self.draw_action.setChecked(False)
 
-    def _on_draw_class_changed(self, class_id: int) -> None:
+    def _on_active_class_changed(self, class_id: int) -> None:
+        if self._syncing_class or class_id is None:
+            return
+        self._active_class_id = class_id
+        self._syncing_class = True
+        try:
+            self.class_panel.set_current_class(class_id)
+            self.detection_list.set_current_class(class_id)
+        finally:
+            self._syncing_class = False
         if self.draw_action.isChecked():
             self.canvas.set_draw_mode(True, class_id)
+
+    def _on_classes_reloaded(self) -> None:
+        classes = self.project_state.classes
+        if not classes:
+            self._active_class_id = 0
+            return
+        if all(c.class_id != self._active_class_id for c in classes):
+            self._active_class_id = classes[0].class_id
 
     def _on_undo(self) -> None:
         description = self.project_state.undo_manager.undo()

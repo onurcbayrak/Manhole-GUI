@@ -16,7 +16,9 @@ class ClassPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.addWidget(QLabel("Classes (used when drawing new boxes):"))
+        label = QLabel("Active class — used for new boxes (synced with the Detections tab):")
+        label.setWordWrap(True)
+        layout.addWidget(label)
         self.list_widget = QListWidget()
         self.list_widget.currentRowChanged.connect(self._on_row_changed)
         layout.addWidget(self.list_widget)
@@ -47,3 +49,17 @@ class ClassPanel(QWidget):
         if item is None:
             return 0
         return item.data(Qt.ItemDataRole.UserRole)
+
+    def set_current_class(self, class_id: int) -> None:
+        for row in range(self.list_widget.count()):
+            item = self.list_widget.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) != class_id:
+                continue
+            if self.list_widget.currentRow() == row:
+                return
+            self.list_widget.blockSignals(True)
+            try:
+                self.list_widget.setCurrentRow(row)
+            finally:
+                self.list_widget.blockSignals(False)
+            return
