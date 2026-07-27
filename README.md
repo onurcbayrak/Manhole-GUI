@@ -39,7 +39,7 @@ Python 3.10, 3.11, 3.12, or 3.13 all work. For a clean install, prefer a virtual
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 # source .venv/bin/activate        # macOS / Linux
-pip install git+https://github.com/<your-github-username>/Manhole-GUI.git
+pip install git+https://github.com/onurcbayrak/Manhole-GUI.git
 manhole-gui
 ```
 
