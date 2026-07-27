@@ -140,16 +140,6 @@ For non-georeferenced PNG/JPEG inputs, `gsd_m`, `w_m`, `h_m`, `area_m2` are empt
 
 ---
 
-## Troubleshooting
-
-- **`ImportError: DLL load failed while importing QtCore`** — you're on PySide6 ≥ 6.11 in a mixed environment. `pip install "PySide6<6.10"` inside your venv.
-- **Inference is very slow** — you're on CPU. Install a CUDA-enabled PyTorch build and ultralytics will pick it up automatically.
-- **SAM text prompt fails with "model did not accept a text prompt"** — the `.pt` you loaded is a mask-only SAM checkpoint. Use one that supports text prompts (SAM3-style).
-- **Export shapefile column names are truncated** — this is a shapefile format limitation (10 chars max). Use `.gpkg` or `.geojson` if you need long names.
-
----
-
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
