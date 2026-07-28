@@ -58,21 +58,6 @@ python -m venv .venv
 pip install -e .
 manhole-gui
 ```
-
-### Option C — Standalone Windows executable
-
-If you don't want to install Python at all, grab the pre-built `.exe` from the
-[Releases page](https://github.com/<your-github-username>/Manhole-GUI/releases),
-unzip it, and double-click `manhole-gui.exe`.
-
-To build it yourself:
-
-```powershell
-pip install pyinstaller
-pyinstaller build_exe.spec
-# Result: dist\manhole-gui\manhole-gui.exe
-```
-
 ---
 
 ## Quick start
