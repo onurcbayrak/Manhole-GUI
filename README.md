@@ -91,9 +91,6 @@ pyinstaller build_exe.spec
 **Detection weights** (YOLO `.pt`): bring your own. The project's paper uses SAS-enhanced YOLOv11m / YOLOv8s. Any Ultralytics-format `.pt` works. Keep the file wherever you like — it's not part of the repo (`.pt` files are `.gitignore`'d because they're large and specific to your training).
 
 **SAM3 weights** (`sam3.pt`, ~3.4 GB): optional. Download from the model provider and place anywhere; the app remembers the last-used path.
-
-For distribution, consider [Hugging Face Model Hub](https://huggingface.co/) or [Zenodo](https://zenodo.org/) for the weights, and link to them from this README once the paper is out.
-
 ---
 
 ## Keyboard shortcuts
